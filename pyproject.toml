@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "context-hub"
+version = "0.1.0"
+description = "A middle layer that pulls personal text from silos (Flomo first) into a uniform markdown tree for any agent to read."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12",
+    "markdownify>=0.11",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+context-hub = "context_hub.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["context_hub*"]
