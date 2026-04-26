@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from bs4 import BeautifulSoup
+from markdownify import markdownify as md
+
+from . import render as _render
+
+
+SOURCE = "flomo"
 
 
 @dataclass(frozen=True)
@@ -97,6 +104,42 @@ def _parse_one(div) -> Memo | None:
         audio_transcripts=tuple(audio_transcripts),
         tags=tags,
     )
+
+
+def memo_id(memo: Memo) -> str:
+    """Stable id derived from creation time + raw HTML content.
+
+    Same input → same id. Editing a memo upstream changes the id (treated
+    as DELETE + ADD on next import, which is consistent with full-mirror).
+    """
+    h = hashlib.sha1()
+    h.update(memo.created_at.isoformat().encode("utf-8"))
+    h.update(b"\n")
+    h.update(memo.raw_content_html.encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+def render(memo: Memo) -> tuple[PurePosixPath, str]:
+    """Render a Memo to (relative posix path, full file content)."""
+    mid = memo_id(memo)
+    body = _render_body(memo)
+    fm = {
+        "source": SOURCE,
+        "memo_id": mid,
+        "created_at": memo.created_at.isoformat(),
+        "tags": list(memo.tags),
+    }
+    rel_path = _render.make_path(memo.created_at, mid)
+    content = _render.make_file_content(fm, body)
+    return rel_path, content
+
+
+def _render_body(memo: Memo) -> str:
+    body_md = md(memo.raw_content_html, heading_style="ATX").strip()
+    if memo.audio_transcripts:
+        for t in memo.audio_transcripts:
+            body_md = body_md + "\n\n[audio transcript] " + t.strip()
+    return body_md.strip()
 
 
 def _find_index_html(zf: zipfile.ZipFile) -> str:

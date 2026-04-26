@@ -47,12 +47,22 @@ def test_scan_only_picks_up_flomo_files(tmp_path: Path):
     (tmp_path / "n.md").write_text(FM_OTHER + "hi")
     (tmp_path / "plain.md").write_text(NO_FM)
     (tmp_path / "not_md.txt").write_text("ignore me")
-    out = tree.scan(tmp_path)
+    out = tree.scan(tmp_path, "flomo")
     assert set(out.keys()) == {"a"}
 
 
+def test_scan_filters_by_source(tmp_path: Path):
+    """A second source's files coexist; scan picks only the requested one."""
+    fm_flomo_a = "---\nsource: flomo\nmemo_id: a\n---\n\n"
+    fm_obs_b = "---\nsource: obsidian\nnote_id: b\n---\n\n"
+    (tmp_path / "f.md").write_text(fm_flomo_a + "x")
+    (tmp_path / "o.md").write_text(fm_obs_b + "y")
+    assert set(tree.scan(tmp_path, "flomo").keys()) == {"a"}
+    assert set(tree.scan(tmp_path, "obsidian").keys()) == {"b"}
+
+
 def test_scan_handles_missing_root(tmp_path: Path):
-    out = tree.scan(tmp_path / "does_not_exist")
+    out = tree.scan(tmp_path / "does_not_exist", "flomo")
     assert out == {}
 
 

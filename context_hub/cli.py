@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import flomo, render, tree
+from . import flomo, obsidian, tree
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -12,8 +12,16 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     imp = sub.add_parser("import", help="import a source export into the hub")
-    imp.add_argument("source", choices=["flomo"], help="which source format")
-    imp.add_argument("zip_path", type=Path, help="path to the source export zip")
+    imp.add_argument(
+        "source",
+        choices=["flomo", "obsidian"],
+        help="which source format",
+    )
+    imp.add_argument(
+        "input_path",
+        type=Path,
+        help="path to the source input (flomo: export zip; obsidian: vault dir)",
+    )
     imp.add_argument(
         "--root",
         type=Path,
@@ -35,33 +43,38 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _cmd_import(args) -> int:
-    zip_path: Path = args.zip_path
+    source: str = args.source
+    input_path: Path = args.input_path
     root: Path = args.root
 
-    if not zip_path.exists():
-        print(f"error: zip not found: {zip_path}", file=sys.stderr)
+    # parse + render — each source produces (item_id → (rel_path, content)).
+    if source == "flomo":
+        if not input_path.exists():
+            print(f"error: zip not found: {input_path}", file=sys.stderr)
+            return 2
+        if not input_path.is_file():
+            print(f"error: not a file: {input_path}", file=sys.stderr)
+            return 2
+        report = flomo.parse_zip(input_path)
+        desired = {flomo.memo_id(m): flomo.render(m) for m in report.memos}
+        skipped = report.skipped_empty + report.skipped_malformed
+    elif source == "obsidian":
+        if not input_path.exists():
+            print(f"error: vault not found: {input_path}", file=sys.stderr)
+            return 2
+        if not input_path.is_dir():
+            print(f"error: not a directory: {input_path}", file=sys.stderr)
+            return 2
+        report = obsidian.scan_vault(input_path)
+        desired = {obsidian.note_id(n): obsidian.render(n) for n in report.notes}
+        skipped = report.skipped_empty + report.skipped_malformed
+    else:
+        print(f"error: unknown source: {source}", file=sys.stderr)
         return 2
-    if not zip_path.is_file():
-        print(f"error: not a file: {zip_path}", file=sys.stderr)
-        return 2
 
-    # parse
-    report = flomo.parse_zip(zip_path)
-
-    # render desired
-    desired: dict[str, tuple] = {}
-    for memo in report.memos:
-        rel_path, content = render.render(memo)
-        mid = render.memo_id(memo)
-        desired[mid] = (rel_path, content)
-
-    # scan current
-    current = tree.scan(root)
-
-    # diff
+    current = tree.scan(root, source)
     plan = tree.diff(desired, current, root)
 
-    skipped = report.skipped_empty + report.skipped_malformed
     skipped_suffix = f"  ! {skipped} skipped" if skipped else ""
 
     if args.dry_run:
@@ -69,7 +82,6 @@ def _cmd_import(args) -> int:
         _print_plan_details(plan)
         return 0
 
-    # write probe before any mutation
     if not plan.is_empty():
         try:
             tree.probe_writable(root)

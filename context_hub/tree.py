@@ -6,9 +6,6 @@ from pathlib import Path, PurePosixPath
 import yaml
 
 
-SOURCE_TAG = "flomo"
-
-
 @dataclass
 class Plan:
     adds: list[tuple[PurePosixPath, str]] = field(default_factory=list)
@@ -30,11 +27,16 @@ class Plan:
         )
 
 
-def scan(root: Path) -> dict[str, tuple[Path, str]]:
-    """Walk root, parse frontmatter, return {memo_id: (abs_path, content_str)}.
+_ID_FIELDS = ("memo_id", "note_id", "id")
 
-    Only files with frontmatter `source: flomo` are indexed. Anything else is
-    silently ignored (not our content).
+
+def scan(root: Path, source: str) -> dict[str, tuple[Path, str]]:
+    """Walk root, parse frontmatter, return {item_id: (abs_path, content_str)}.
+
+    Only files with frontmatter `source: <source>` are indexed. Anything
+    else is silently ignored (not our content).
+
+    The id is read from the first present of: memo_id, note_id, id.
     """
     out: dict[str, tuple[Path, str]] = {}
     if not root.exists():
@@ -49,12 +51,17 @@ def scan(root: Path) -> dict[str, tuple[Path, str]]:
         fm = _read_frontmatter(content)
         if fm is None:
             continue
-        if fm.get("source") != SOURCE_TAG:
+        if fm.get("source") != source:
             continue
-        mid = fm.get("memo_id")
-        if not isinstance(mid, str):
+        item_id = None
+        for k in _ID_FIELDS:
+            v = fm.get(k)
+            if isinstance(v, str) and v:
+                item_id = v
+                break
+        if item_id is None:
             continue
-        out[mid] = (path, content)
+        out[item_id] = (path, content)
     return out
 
 
