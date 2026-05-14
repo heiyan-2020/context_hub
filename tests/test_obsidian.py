@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.conftest import managed_md
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -295,7 +296,7 @@ def test_e2e_obsidian_first_import(tmp_path: Path):
     _make_basic_vault(vault)
     rc = cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
     assert rc == 0
-    files = sorted(p.relative_to(hub).as_posix() for p in hub.rglob("*.md"))
+    files = sorted(p.relative_to(hub).as_posix() for p in managed_md(hub))
     assert len(files) == 2
 
 
@@ -304,10 +305,10 @@ def test_e2e_obsidian_idempotent(tmp_path: Path):
     hub = tmp_path / "hub"
     _make_basic_vault(vault)
     cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
-    snap1 = {p.relative_to(hub).as_posix(): p.read_text() for p in hub.rglob("*.md")}
+    snap1 = {p.relative_to(hub).as_posix(): p.read_text() for p in managed_md(hub)}
     rc = cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
     assert rc == 0
-    snap2 = {p.relative_to(hub).as_posix(): p.read_text() for p in hub.rglob("*.md")}
+    snap2 = {p.relative_to(hub).as_posix(): p.read_text() for p in managed_md(hub)}
     assert snap1 == snap2
 
 
@@ -316,12 +317,12 @@ def test_e2e_obsidian_full_mirror_on_delete(tmp_path: Path):
     hub = tmp_path / "hub"
     _make_basic_vault(vault)
     cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
-    assert len(list(hub.rglob("*.md"))) == 2
+    assert len(list(managed_md(hub))) == 2
 
     # delete one note from vault and re-import
     (vault / "sub" / "b.md").unlink()
     cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
-    files = list(hub.rglob("*.md"))
+    files = list(managed_md(hub))
     assert len(files) == 1
 
 
@@ -333,7 +334,7 @@ def test_e2e_obsidian_update_on_edit(tmp_path: Path):
         "---\ncreated_at: 2026-04-25T09:31:14+08:00\n---\n\nfirst version\n",
     )
     cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
-    files = list(hub.rglob("*.md"))
+    files = list(managed_md(hub))
     assert len(files) == 1
     first_path = files[0]
 
@@ -345,7 +346,7 @@ def test_e2e_obsidian_update_on_edit(tmp_path: Path):
     # path unchanged (id is path-based, created_at unchanged) → UPDATE
     assert first_path.exists()
     assert "second version" in first_path.read_text()
-    assert len(list(hub.rglob("*.md"))) == 1
+    assert len(list(managed_md(hub))) == 1
 
 
 def test_e2e_obsidian_coexists_with_flomo(tmp_path: Path):
@@ -363,7 +364,7 @@ def test_e2e_obsidian_coexists_with_flomo(tmp_path: Path):
     cli_main(["import", "obsidian", str(vault), "--root", str(hub)])
     assert flomo_file.exists()
     # 1 flomo + 2 obsidian
-    assert len(list(hub.rglob("*.md"))) == 3
+    assert len(list(managed_md(hub))) == 3
 
 
 def test_e2e_obsidian_does_not_touch_user_files(tmp_path: Path):
@@ -384,7 +385,7 @@ def test_e2e_obsidian_dry_run(tmp_path: Path):
     _make_basic_vault(vault)
     rc = cli_main(["import", "obsidian", str(vault), "--root", str(hub), "--dry-run"])
     assert rc == 0
-    assert not hub.exists() or not any(hub.rglob("*.md"))
+    assert not hub.exists() or not any(managed_md(hub))
 
 
 def test_e2e_obsidian_missing_vault(tmp_path: Path):

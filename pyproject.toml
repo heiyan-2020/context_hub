@@ -4,10 +4,41 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "context-hub"
-version = "0.1.0"
-description = "A middle layer that pulls personal text from silos (Flomo first) into a uniform markdown tree for any agent to read."
+version = "0.2.0"
+description = "Pull personal notes from Flomo, Obsidian, and similar apps into a uniform markdown tree, build an agent-friendly index, and query it from any agent."
 readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+# TODO(publish): replace with your real name / handle before publishing.
+authors = [
+    { name = "zyvq4b8dxw" },
+]
+keywords = [
+    "personal-knowledge-management",
+    "notes",
+    "flomo",
+    "obsidian",
+    "second-brain",
+    "markdown",
+    "agent",
+    "llm",
+    "claude",
+    "context",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Topic :: Utilities",
+]
 dependencies = [
     "beautifulsoup4>=4.12",
     "markdownify>=0.11",
@@ -17,8 +48,22 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 
+# TODO(publish): replace USERNAME with your GitHub account before publishing.
+[project.urls]
+Homepage = "https://github.com/USERNAME/context-hub"
+Repository = "https://github.com/USERNAME/context-hub"
+Issues = "https://github.com/USERNAME/context-hub/issues"
+
 [project.scripts]
 context-hub = "context_hub.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["context_hub*"]
+
+[tool.setuptools.package-data]
+context_hub = [
+    "skills/context-hub/SKILL.md",
+    "skills/cluster-context-hub/SKILL.md",
+    "skills/cluster-context-hub/references/*.md",
+    "skills/cluster-context-hub/scripts/*.py",
+]

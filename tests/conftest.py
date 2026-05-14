@@ -8,6 +8,15 @@ from textwrap import dedent
 import pytest
 
 
+def managed_md(root: Path) -> list[Path]:
+    """All `*.md` files under root, excluding the hub-owned `_index/` directory."""
+    return [
+        p
+        for p in root.rglob("*.md")
+        if p.is_file() and "_index" not in p.relative_to(root).parts
+    ]
+
+
 def make_flomo_html(memos_html: str) -> bytes:
     return dedent(
         f"""\

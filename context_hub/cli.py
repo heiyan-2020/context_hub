@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import flomo, obsidian, tree
+from . import flomo, index as index_mod, obsidian, tree
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,11 +33,62 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print the plan without writing or deleting files",
     )
+    imp.add_argument(
+        "--no-index",
+        action="store_true",
+        help="skip regenerating <root>/_index/ after import",
+    )
+
+    rx = sub.add_parser("reindex", help="rebuild <root>/_index/ from current hub state")
+    rx.add_argument(
+        "--root",
+        type=Path,
+        default=Path.home() / "context-hub",
+        help="hub root (default: ~/context-hub)",
+    )
+
+    sp = sub.add_parser("skill-path", help="print path to a packaged skill bundle")
+    sp.add_argument(
+        "skill",
+        nargs="?",
+        choices=["context-hub", "cluster-context-hub"],
+        default="context-hub",
+        help="which skill (default: context-hub, the query skill)",
+    )
+
+    inst = sub.add_parser(
+        "install-skill",
+        help="copy the packaged skill bundles into ~/.claude/skills/ "
+             "(or a custom --target) so Claude Code picks them up",
+    )
+    inst.add_argument(
+        "--target",
+        type=Path,
+        default=Path.home() / ".claude" / "skills",
+        help="skills base directory (default: ~/.claude/skills)",
+    )
+    inst.add_argument(
+        "--skill",
+        choices=["context-hub", "cluster-context-hub", "all"],
+        default="all",
+        help="which skill(s) to install (default: all)",
+    )
+    inst.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite existing skill directories in target",
+    )
 
     args = parser.parse_args(argv)
 
     if args.cmd == "import":
         return _cmd_import(args)
+    if args.cmd == "reindex":
+        return _cmd_reindex(args)
+    if args.cmd == "skill-path":
+        return _cmd_skill_path(args)
+    if args.cmd == "install-skill":
+        return _cmd_install_skill(args)
     parser.error(f"unknown command: {args.cmd}")
     return 2
 
@@ -91,7 +142,110 @@ def _cmd_import(args) -> int:
 
     tree.apply(plan, root)
     print(f"{plan.summary()}{skipped_suffix}")
+    if not args.no_index:
+        try:
+            stats = index_mod.generate_full_index(root)
+            print(_index_summary(stats))
+        except index_mod.IndexLayoutError as e:
+            print(
+                f"markdown changes applied; index regeneration failed: {e}; "
+                f"run `context-hub reindex --root {root}` to refresh _index/",
+                file=sys.stderr,
+            )
+            return 1
     return 0
+
+
+def _cmd_reindex(args) -> int:
+    root: Path = args.root
+    if not root.exists():
+        print(f"error: hub root does not exist: {root}", file=sys.stderr)
+        return 2
+    if not root.is_dir():
+        print(f"error: hub root is not a directory: {root}", file=sys.stderr)
+        return 2
+    try:
+        stats = index_mod.generate_full_index(root)
+    except index_mod.IndexLayoutError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(_index_summary(stats))
+    return 0
+
+
+def _packaged_skill_dir(name: str):
+    """Return a Traversable for context_hub/skills/<name>/, or None if missing."""
+    from importlib.resources import files
+    try:
+        d = files("context_hub").joinpath("skills", name)
+    except (ModuleNotFoundError, FileNotFoundError):
+        return None
+    return d if d.is_dir() else None
+
+
+def _cmd_skill_path(args) -> int:
+    d = _packaged_skill_dir(args.skill)
+    if d is None:
+        print(f"error: skill bundle '{args.skill}' not packaged", file=sys.stderr)
+        return 1
+    skill_md = d.joinpath("SKILL.md")
+    if not skill_md.is_file():
+        print(f"error: {args.skill}/SKILL.md missing in package", file=sys.stderr)
+        return 1
+    print(str(skill_md))
+    return 0
+
+
+def _cmd_install_skill(args) -> int:
+    """Copy packaged skill bundles into a Claude-discoverable directory."""
+    import shutil
+    from importlib.resources import as_file
+
+    names = (
+        ["context-hub", "cluster-context-hub"]
+        if args.skill == "all"
+        else [args.skill]
+    )
+    base: Path = args.target
+    base.mkdir(parents=True, exist_ok=True)
+
+    installed: list[Path] = []
+    for name in names:
+        src = _packaged_skill_dir(name)
+        if src is None:
+            print(f"error: skill bundle '{name}' not packaged", file=sys.stderr)
+            return 1
+        dst = base / name
+        if dst.exists() and not args.force:
+            print(
+                f"error: {dst} already exists; pass --force to overwrite",
+                file=sys.stderr,
+            )
+            return 1
+        with as_file(src) as real_src:
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(real_src, dst)
+        installed.append(dst)
+
+    for dst in installed:
+        print(f"installed -> {dst}")
+    print()
+    print("Next steps:")
+    print(f"  - set CONTEXT_HUB_ROOT to your hub root (where `context-hub import` wrote to)")
+    print(f"  - restart Claude Code (or /reload-plugins)")
+    print(f"  - context-hub auto-triggers when you ask about your past notes;")
+    print(f"    cluster-context-hub triggers when you ask to (re)cluster the hub")
+    return 0
+
+
+def _index_summary(stats: dict) -> str:
+    by = ", ".join(f"{k}={v}" for k, v in sorted(stats["by_source"].items()))
+    return (
+        f"_index/ rebuilt: {stats['total']} notes ({by or 'no sources'}); "
+        f"{stats['tag_nodes']} tag nodes; {stats['scopes_applied']} scopes applied; "
+        f"generated {stats['generated_at']}"
+    )
 
 
 def _print_plan_details(plan: tree.Plan, max_per_kind: int = 5) -> None:
