@@ -11,12 +11,13 @@ build/
 .coverage
 
 # Source exports and generated hub output (user data — never publish)
-flomo.zip
-flomo*.zip
-*.zip
-out/
-~context-hub/
-context-hub/
+# NOTE: keep these patterns ANCHORED (leading /) — an un-anchored `context-hub/`
+# would also match the bundled skill dir context_hub/skills/context-hub/.
+/flomo.zip
+/flomo*.zip
+/*.zip
+/out/
+/context-hub/
 
 # Agent / tooling local state (not part of context-hub)
 .claude/
