@@ -63,7 +63,6 @@ include = ["context_hub*"]
 [tool.setuptools.package-data]
 context_hub = [
     "skills/context-hub/SKILL.md",
-    "skills/cluster-context-hub/SKILL.md",
-    "skills/cluster-context-hub/references/*.md",
-    "skills/cluster-context-hub/scripts/*.py",
+    "skills/build-graph/SKILL.md",
+    "skills/build-graph/scripts/*.py",
 ]

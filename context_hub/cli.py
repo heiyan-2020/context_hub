@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import flomo, index as index_mod, obsidian, tree
+from . import flomo, graph as graph_mod, index as index_mod, obsidian, tree
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         help="skip regenerating <root>/_index/ after import",
     )
 
-    rx = sub.add_parser("reindex", help="rebuild <root>/_index/ from current hub state")
+    rx = sub.add_parser("reindex", help="rebuild <root>/_index/{tags,recents}.json")
     rx.add_argument(
         "--root",
         type=Path,
@@ -47,11 +47,39 @@ def main(argv: list[str] | None = None) -> int:
         help="hub root (default: ~/context-hub)",
     )
 
+    gp = sub.add_parser(
+        "graph",
+        help="build the thought-network graph (_index/graph.{json,html}). "
+             "Uses agent_handles.yaml if present, otherwise the deterministic "
+             "bigram pipeline. Orchestration of the full agent-driven build "
+             "lives in the `build-graph` skill.",
+    )
+    gp.add_argument(
+        "--root",
+        type=Path,
+        default=Path.home() / "context-hub",
+        help="hub root (default: ~/context-hub)",
+    )
+
+    viz = sub.add_parser(
+        "visualize",
+        help="re-render _index/graph.html from the existing _index/graph.json "
+             "(use after editing context_hub/visualize.py)",
+    )
+    viz.add_argument(
+        "--root",
+        type=Path,
+        default=Path.home() / "context-hub",
+        help="hub root (reads <root>/_index/graph.json)",
+    )
+    viz.add_argument("--input", type=Path, help="explicit input JSON path")
+    viz.add_argument("--output", type=Path, help="explicit output HTML path")
+
     sp = sub.add_parser("skill-path", help="print path to a packaged skill bundle")
     sp.add_argument(
         "skill",
         nargs="?",
-        choices=["context-hub", "cluster-context-hub"],
+        choices=["context-hub", "build-graph"],
         default="context-hub",
         help="which skill (default: context-hub, the query skill)",
     )
@@ -69,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     inst.add_argument(
         "--skill",
-        choices=["context-hub", "cluster-context-hub", "all"],
+        choices=["context-hub", "build-graph", "all"],
         default="all",
         help="which skill(s) to install (default: all)",
     )
@@ -85,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_import(args)
     if args.cmd == "reindex":
         return _cmd_reindex(args)
+    if args.cmd == "graph":
+        return _cmd_graph(args)
+    if args.cmd == "visualize":
+        return _cmd_visualize(args)
     if args.cmd == "skill-path":
         return _cmd_skill_path(args)
     if args.cmd == "install-skill":
@@ -98,7 +130,6 @@ def _cmd_import(args) -> int:
     input_path: Path = args.input_path
     root: Path = args.root
 
-    # parse + render — each source produces (item_id → (rel_path, content)).
     if source == "flomo":
         if not input_path.exists():
             print(f"error: zip not found: {input_path}", file=sys.stderr)
@@ -125,7 +156,6 @@ def _cmd_import(args) -> int:
 
     current = tree.scan(root, source)
     plan = tree.diff(desired, current, root)
-
     skipped_suffix = f"  ! {skipped} skipped" if skipped else ""
 
     if args.dry_run:
@@ -173,6 +203,46 @@ def _cmd_reindex(args) -> int:
     return 0
 
 
+def _cmd_graph(args) -> int:
+    root: Path = args.root
+    if not root.is_dir():
+        print(f"error: hub root does not exist: {root}", file=sys.stderr)
+        return 2
+    agent_path = root / "_index" / "agent_handles.yaml"
+    if not agent_path.is_file():
+        print(f"⚠ {agent_path} not found — building from the deterministic "
+              f"bigram path. Run the build-graph skill to produce agent handles.",
+              file=sys.stderr)
+    stats = graph_mod.generate_graph(root)
+    print(
+        f"graph built: {stats['connected_notes']}/{stats['in_scope_notes']} "
+        f"in-scope notes connected; {stats['edges']} edges; "
+        f"{stats['handles']} handles; source={stats['handle_source']}; "
+        f"{stats['excluded_notes']} chore notes excluded; "
+        f"generated {stats['generated_at']}"
+    )
+    top = list(stats["communities"].items())[:5]
+    if top:
+        print(f"  top communities: " +
+              ", ".join(f"{k}={v}" for k, v in top))
+    print(f"  -> {root / '_index' / 'graph.html'}")
+    return 0
+
+
+def _cmd_visualize(args) -> int:
+    from .visualize import render_to_file
+    idx = args.root / "_index"
+    input_path = args.input or idx / "graph.json"
+    output_path = args.output or idx / "graph.html"
+    if not input_path.is_file():
+        print(f"error: input JSON not found: {input_path}", file=sys.stderr)
+        return 2
+    stats = render_to_file(input_path, output_path)
+    print(f"rendered {stats['nodes']} nodes, {stats['edges']} edges "
+          f"({stats['handle_source']}) -> {stats['output']}")
+    return 0
+
+
 def _packaged_skill_dir(name: str):
     """Return a Traversable for context_hub/skills/<name>/, or None if missing."""
     from importlib.resources import files
@@ -202,7 +272,7 @@ def _cmd_install_skill(args) -> int:
     from importlib.resources import as_file
 
     names = (
-        ["context-hub", "cluster-context-hub"]
+        ["context-hub", "build-graph"]
         if args.skill == "all"
         else [args.skill]
     )
@@ -232,10 +302,11 @@ def _cmd_install_skill(args) -> int:
         print(f"installed -> {dst}")
     print()
     print("Next steps:")
-    print(f"  - set CONTEXT_HUB_ROOT to your hub root (where `context-hub import` wrote to)")
+    print(f"  - set CONTEXT_HUB_ROOT to your hub root "
+          f"(where `context-hub import` wrote to)")
     print(f"  - restart Claude Code (or /reload-plugins)")
-    print(f"  - context-hub auto-triggers when you ask about your past notes;")
-    print(f"    cluster-context-hub triggers when you ask to (re)cluster the hub")
+    print(f"  - `context-hub` auto-triggers when you ask about your past notes;")
+    print(f"    `build-graph` triggers when you ask to (re)build the hierarchical graph.")
     return 0
 
 
@@ -243,7 +314,6 @@ def _index_summary(stats: dict) -> str:
     by = ", ".join(f"{k}={v}" for k, v in sorted(stats["by_source"].items()))
     return (
         f"_index/ rebuilt: {stats['total']} notes ({by or 'no sources'}); "
-        f"{stats['tag_nodes']} tag nodes; {stats['scopes_applied']} scopes applied; "
         f"generated {stats['generated_at']}"
     )
 
