@@ -1,12 +1,6 @@
 ---
 name: context-hub
-description: Query a user's personal context hub — a directory of markdown notes
-  imported from Flomo, Obsidian, and similar apps. Use this skill whenever the
-  user asks about their own past notes, journal entries, prior thinking on a
-  topic, what they wrote about something, when they last considered an idea,
-  or wants to be reminded of related past writing. Also trigger when the user
-  references concepts that are likely in their personal corpus (their projects,
-  research topics, ongoing reflections) rather than general knowledge.
+description: Query a user's personal context hub — a directory of markdown notes imported from Flomo, Obsidian, and similar apps. Use this skill whenever the user asks about their own past notes, journal entries, prior thinking on a topic, what they wrote about something, when they last considered an idea, or wants to be reminded of related past writing. Also trigger when the user references concepts that are likely in their personal corpus (their projects, research topics, ongoing reflections) rather than general knowledge.
 ---
 
 # Context Hub Skill
@@ -24,128 +18,260 @@ user tells you. Typical default: `~/context-hub`.
 │                                       tags) + body. SOURCE OF TRUTH — always
 │                                       cite from these.
 └── _index/                            ← derived artifacts, regenerable
-    ├── INDEX.md                       ← hierarchical page index (human-readable)
-    ├── tree.json                      ← same tree as machine-readable JSON,
-    │                                    with description + routing_scope per node
-    ├── tags.json                      ← inverted map: tag → [paths]
-    ├── recents.json                   ← newest 100 notes with frontmatter + preview
-    ├── scopes.yaml                    ← source of description / routing_scope
-    └── synthetic_tags.yaml            ← agent-clustered overlay: path → Auto/<top>[/<sub>]
+    ├── tags.json                      ← inverted map: user tag → [paths]
+    ├── recents.json                   ← newest 100 notes with preview
+    ├── agent_handles.yaml             ← path → [handles] (per-note concept labels)
+    ├── community_summaries.yaml       ← L0 communities with title + summary
+    ├── community_hierarchy.yaml       ← 2-level tree: 6 super → ~21 L0 → notes
+    ├── graph.json                     ← full thought-network (every note as a node)
+    └── graph.html                     ← interactive viewer (open in browser)
 ```
 
-## Two parallel trees in INDEX.md
+## Three ways to find a note
 
-The hub has **two coexisting hierarchies**, each note appears in BOTH:
+The hub has three coexisting retrieval indices, each with different recall
+and precision profiles. **For any topic query, walk all three and union the
+resulting paths** — they overlap heavily but each catches notes the others
+miss.
 
-1. **User-curated tag tree** (top of INDEX.md) — built from the user's own
-   frontmatter and inline `#tags`. Hand-written, idiosyncratic, ~290 distinct
-   tags. Top examples: `思考` (~360), `长线记录/观点演进` (~184),
-   `反思` (~280), `科研/读博心态` (~70), `引用` (~210), etc.
+### 1. User-curated tag tree (`tags.json`)
 
-2. **Agent-clustered tree** (`Auto/<top>[/<sub>]`, bottom of INDEX.md) — built
-   by Claude reading representative samples and assigning every note to one
-   path. 18 top-level + ~36 sub-level clusters, every cluster ≤ 5% of corpus.
-   Examples: `Auto/自我反思与内省/摆烂沉迷拖延`, `Auto/科研·读博·导师/读博心态·Quit`,
-   `Auto/学习方法与工作流/笔记工具与第二大脑`.
+The user's own `#tags` in frontmatter / inline. Hand-written, idiosyncratic.
+**High precision** where the user tagged deliberately, but many notes are
+untagged or one-off-tagged → **recall is patchy**.
 
-Use the user-tag tree when the user uses **their own vocabulary** (`#引用`,
-`#长线记录`). Use the Auto tree when the user asks by **topic** (e.g.,
-"我以前关于完美主义的想法") and the topic doesn't map cleanly to a hand tag.
+```bash
+jq '.tags | keys[]' $HUB/_index/tags.json          # all tags
+jq -r '.tags["哲学"][]' $HUB/_index/tags.json       # all paths under one tag
+```
 
-## Agent contract — load-bearing
+### 2. Agent handle index (`agent_handles.yaml`) — *use this most*
 
-Each node in `tree.json` has two text fields with **different contracts**:
+Built by the `build-graph` skill. Every note was read by an agent and
+tagged with 3-6 **canonical concept handles** drawn from a curated
+vocabulary of ~500 strings (e.g. `工具理性`, `第二大脑`, `RAG`,
+`完美主义`, `观点演进`, `卡片笔记`). This is the densest, most reliable
+topic index in the hub:
 
-| field | safe to display to user? | use for |
-|---|---|---|
-| `description` | YES | tell the user what a bucket is broadly about |
-| `routing_scope` | **NO — agent-only** | decide which paths to read; never quote to user |
+- **Recall is high**: every connected note has handles (3.6 avg), so
+  most concepts touched in a note are findable, not just the ones the
+  user remembered to tag.
+- **Precision is high**: the vocabulary was curated to drop vague words
+  ("思考", "重要"); each handle is a real distinguishable concept.
+- **Granularity is per-note**, not per-community — a note touching
+  multiple concepts shows up under each.
 
-`routing_scope` may contain phrases like "用户倾向 X" or "用户认为 Y". **These
-are inferences from the shape of the bucket, not the user's words.** You MUST
-NOT quote `routing_scope` text back to the user as if it were their views.
+Schema: `assignments: {<rel_path>: [<handle>, ...]}`. Two important moves:
 
-When the user asks "what did I think about X?", use `routing_scope` to navigate
-to the right paths, **then read the original `.md` files** and quote from those.
+```bash
+# (a) From concept name → notes: invert and look up
+python3 -c "
+import yaml; d = yaml.safe_load(open('$HUB/_index/agent_handles.yaml'))
+inv = {}
+for path, hs in d['assignments'].items():
+    for h in hs: inv.setdefault(h, []).append(path)
+for p in inv.get('工具理性', []): print(p)
+"
+
+# (b) Discover what handles even exist (the controlled vocabulary)
+yq '.assignments[] | .[]' $HUB/_index/agent_handles.yaml | sort -u
+
+# (c) For a known note path → its handles
+yq --arg p "2024/03/13/0011-..." \
+   '.assignments[$p][]?' $HUB/_index/agent_handles.yaml
+```
+
+**When to prefer this over user tags**: anytime the topic isn't an
+exact match for a `#tag` the user used. Most topics are.
+
+**Caveat**: if a concept isn't in the curated vocabulary (~500 handles
+total), it won't appear here — fall back to grep for those.
+
+### 3. Agent-built community hierarchy (`community_hierarchy.yaml`)
+
+Built by the `build-graph` skill from the actual graph structure (notes
+connected by shared rare handles → Louvain → 2 levels). Covers
+**every connected note exactly once** at each level. Each community has a
+**title** and an **agent-written summary** describing the binding theme.
+
+Best for **"what are the main themes?"** type questions and for finding
+notes by a **broad topic area** (the L1 super-community summary level).
+
+Structure:
+```yaml
+levels:
+  - level: 1            # top: a small number of super-communities
+    nodes:
+      - id: L1:C0
+        title: <agent-written 4-12 char Chinese title>
+        summary: <agent-written 1-2 sentences>
+        handles: [<canonical concept>, <canonical concept>, ...]
+        children: [C1, C3, C5, ...]
+        note_count: 527
+  - level: 0            # L0: typically ~15-25 communities
+    nodes:
+      - id: C1
+        title: <agent-written>
+        summary: <agent-written>
+        handles: [<canonical concept>, <canonical concept>, ...]
+        member_notes: [<rel_path>, <rel_path>, ...]
+        size: 157
+        parent: L1:C0
+```
+
+To find notes by **community topic**, walk this tree top-down: find the L1
+super whose title/summary best matches the topic → look at its L0 children →
+pick the L0 whose title matches → read its `member_notes`.
+
+```bash
+# all L1 super-communities with their titles
+yq '.levels[0].nodes[] | .id + " «" + .title + "» (" + (.note_count|tostring) + " notes)"' \
+   $HUB/_index/community_hierarchy.yaml
+
+# all L0 communities under a given super
+yq '.levels[1].nodes[] | select(.parent == "L1:C0") |
+    .id + " «" + .title + "» (" + (.size|tostring) + " notes)"' \
+   $HUB/_index/community_hierarchy.yaml
+
+# member note paths for a given L0 community
+yq '.levels[1].nodes[] | select(.id == "C1") | .member_notes[]' \
+   $HUB/_index/community_hierarchy.yaml
+```
+
+(`yq` may not be installed; equivalent Python one-liners work too:
+`python -c "import yaml,sys; print('\n'.join(...))"`.)
 
 ## Decision flow
 
-1. **"What did I write recently?"** → `jq '.entries[:20]' <hub>/_index/recents.json`.
+1. **"What did I write recently?"** →
+   ```bash
+   jq '.entries[:20]' $HUB/_index/recents.json
+   ```
 
-2. **"What did I say about <topic>?"** — try in order:
-   - Direct tag match: `jq '.tags | keys[]' <hub>/_index/tags.json` then look
-     for a tag containing the topic. If hit, `jq -r '.tags["<tag>"][]' <hub>/_index/tags.json`.
-   - Auto-cluster match: walk `tree.json` Auto subtree; each node has
-     `description` + `routing_scope` + `direct_paths`. Find the closest
-     cluster name or descriptor. Drill into `direct_paths`.
-   - Grep fallback: the user mixes Chinese and English freely; try both forms.
-     `grep -rni --include='*.md' --exclude-dir='_index' "<query>" <hub>/`
+2. **"What did I say about `<topic>`?"** — do **all four** and union:
+   - **Agent handles** (the densest index — start here):
+     - Look at the vocabulary first: list distinct handles, pick those
+       that name the topic. The vocabulary is finite (~500), so a quick
+       scan finds the matching concept handles.
+     - Invert `agent_handles.yaml` to get `handle → [paths]` and look
+       up paths for each matched handle.
+     - Handles like `工具理性`, `完美主义`, `第二大脑`, `RAG` are
+       canonical — a single handle covers a topic robustly.
+   - **User tags**: `jq '.tags | keys[]' $HUB/_index/tags.json`, find every
+     tag whose name relates to the topic; collect paths via
+     `jq -r '.tags["<tag>"][]'`. Catches deliberate user tagging.
+   - **Hierarchy**: walk `community_hierarchy.yaml`. Find L1 supers and L0
+     communities whose **title** or **summary** references the topic.
+     Collect their `member_notes` (for L0) or recurse into children (for L1).
+     Useful when the topic is broad rather than a single concept.
+   - **Grep**: the user mixes Chinese and English freely. Try both forms.
+     `grep -rlni --include='*.md' --exclude-dir='_index' "<query>" $HUB/`
+     Catches anything the curated indices miss (concepts not in the
+     handle vocabulary, untagged notes, partial spellings).
+   - **Union + dedup** paths from all four, then read the actual `.md`
+     files. Each source catches notes the others miss — the union is
+     the answer, not whichever ran first.
 
-3. **"Show me my notes from <date>"** → walk `<hub>/<YYYY>/<MM>/<DD>/`.
+3. **"Show me my notes from `<date>`"** → walk `$HUB/<YYYY>/<MM>/<DD>/`.
 
-4. **Drilling into a cluster the user mentioned by name** ("看看我 `自律命令`
-   类的笔记") → walk `tree.json` to find the matching node, then read its
-   `direct_paths`. For Auto sub-clusters, the node lives at depth 3 in
-   `tree.json` (Auto → top → sub).
+4. **"What are the main themes of my hub?"** → list the L1 super-communities:
+   ```bash
+   yq '.levels[0].nodes[] |
+       .id + " «" + .title + "» — " + .summary' \
+      $HUB/_index/community_hierarchy.yaml
+   ```
 
-5. **Before quoting any content**, read the actual file (not just preview).
-   Cite by hub-relative path.
+5. **Drilling into a community the user named** ("看看我 `自律` 类的笔记") →
+   match by L0 title in `community_hierarchy.yaml` → read `member_notes`.
 
-## Useful recipes
+6. **Before quoting any content**, read the actual `.md` file (not just the
+   preview in `recents.json`). Cite by hub-relative path.
+
+## Agent contract — summaries are agent-written, not user-written
+
+`title` and `summary` fields in `community_summaries.yaml` and
+`community_hierarchy.yaml` are written by an agent reading a sample of
+the community's notes. **They describe what the agent thinks the cluster
+is about; they are NOT the user's words.**
+
+You may safely show these summaries to the user as "the hub's auto-built
+overview", but when the user asks "what did I think about X", **drill
+down to the actual `.md` files and quote from those** — never quote the
+summary as the user's voice.
+
+## Useful one-liners
 
 ```bash
-# Top-N recent entries (full frontmatter + preview)
+# top-N recent notes with their content preview
 jq '.entries[:10]' $HUB/_index/recents.json
 
-# All notes under a specific user tag
-jq -r '.tags["科研/读博心态"][]' $HUB/_index/tags.json
+# all canonical handles in the vocabulary (dedup, sorted)
+python3 -c "
+import yaml
+d = yaml.safe_load(open('$HUB/_index/agent_handles.yaml'))
+hs = set(h for v in d['assignments'].values() for h in v)
+print('\n'.join(sorted(hs)))
+"
 
-# All notes under an Auto cluster (works for top + sub)
-jq -r --arg cat "Auto/自我反思与内省/完美主义瘫痪" \
-   '.assignments | to_entries[] | select(.value == $cat) | .key' \
-   $HUB/_index/synthetic_tags.yaml | python -c "import sys,yaml; \
-       print('\n'.join(yaml.safe_load(open('/dev/stdin')).get('assignments',{}).keys()))"
-# (simpler form using yq if installed: yq '.assignments | to_entries[] | select(.value == "Auto/..." )')
+# invert agent_handles: handle → [paths], lookup one concept
+python3 -c "
+import yaml
+d = yaml.safe_load(open('$HUB/_index/agent_handles.yaml'))
+inv = {}
+for p, hs in d['assignments'].items():
+    for h in hs: inv.setdefault(h, []).append(p)
+for p in inv.get('工具理性', []): print(p)
+"
 
-# Browse all top-level Auto clusters with descriptions
-jq -r '.tree.children[] | select(.name == "Auto") | .children[] |
-       "\(.name) (\(.count)) — \(.description // "")"' $HUB/_index/tree.json
+# all L1 super-communities
+yq '.levels[0].nodes[] | .id + " «" + .title + "»"' \
+   $HUB/_index/community_hierarchy.yaml
 
-# Browse Auto sub-clusters of a particular top
-jq -r '.. | objects | select(.path == "Auto/自我反思与内省") | .children[] |
-       "  \(.name) (\(.count)) — \(.description // "")"' $HUB/_index/tree.json
+# every L0 community grouped under its L1 super
+yq '.levels[0].nodes[] |
+    .id + " «" + .title + "»: " +
+    (.children | map(.) | join(", "))' \
+   $HUB/_index/community_hierarchy.yaml
 
-# Substring grep across all note bodies
+# which community is this specific note in?
+yq --arg p "<rel_path>" \
+   '.levels[1].nodes[] | select(.member_notes[]? == $p) | .id + " " + .title' \
+   $HUB/_index/community_hierarchy.yaml
+
+# substring grep across note bodies
 grep -rni --include='*.md' --exclude-dir='_index' "完美主义" $HUB/
 ```
 
-## Refreshing the index
+## Refreshing
 
-If the user wants to refresh derived artifacts after editing notes or
-`synthetic_tags.yaml`:
+- **After importing new notes**: `context-hub import flomo|obsidian` runs
+  `reindex` automatically — `tags.json` and `recents.json` stay fresh.
+- **After accumulating substantial new content**: the user (or you, on
+  their request) should invoke the `build-graph` skill to rebuild
+  `agent_handles.yaml`, `community_summaries.yaml`,
+  `community_hierarchy.yaml`, `graph.json`, and `graph.html`.
 
-```bash
-context-hub reindex --root <hub_root>
-```
-
-The `.md` source files are never touched.
-
-## Re-clustering with the cluster-context-hub skill
-
-If the user wants a fresh agent-driven re-clustering (different category
-choices, new sub-splits, etc.), the companion skill `cluster-context-hub` runs
-the full 5-phase pipeline. This is the SOURCE of `synthetic_tags.yaml` and
-the `Auto/*` scopes — the **query** skill (this file) just reads what that
-skill produced.
+The `.md` source files are never modified by either pipeline.
 
 ## Anti-patterns
 
-- **Quoting `routing_scope` to the user as if it's their words.** It's not.
-  It's the agent's inference about the bucket. Always drill to original `.md`
+- **Quoting summaries as the user's voice.** Summaries are agent
+  inferences over each community. Always drill to the original `.md`
   files for actual quotes.
-- **Trusting INDEX.md previews as authoritative.** The 60-80 char preview is
-  for navigation only. Read the full file before citing.
-- **Skipping the user-tag tree.** If the user uses a specific tag, that tag
-  is usually a sharper filter than any Auto cluster.
-- **Treating the hub as searchable English text.** The user writes in Chinese
-  + English mixed; expect both forms when searching.
+- **Trusting `recents.json` previews as authoritative.** The 60-80 char
+  preview is for navigation only. Read the full `.md` before citing.
+- **Stopping after one retrieval path.** Agent handles + user tags +
+  community hierarchy + grep cross-cut the corpus; each captures notes
+  the others miss. For any topic query, always union the four. In
+  particular, **don't skip `agent_handles.yaml`** — it's the densest
+  topic index (every connected note has 3-6 canonical handles) and
+  typically gives the highest recall for any specific concept.
+- **Treating `agent_handles.yaml` as a substring matcher.** Handles are
+  exact canonical strings drawn from a finite vocabulary. If your
+  topic isn't in the vocabulary you must fall back to grep — the
+  inversion lookup does *not* do partial matching for you.
+- **Treating the hub as searchable English text.** The user writes in
+  Chinese + English mixed; expect both forms when searching.
+- **Walking `graph.json` for retrieval.** It's the per-node graph
+  (1500+ entries). Use it only for "show me this note's neighbors" or
+  "what cluster is X in" — for topic queries, use the hierarchy file.
