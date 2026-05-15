@@ -44,10 +44,10 @@ super-summary — is delegated to subagents orchestrated by the
 ## Install
 
 ```bash
-pip install git+https://github.com/USERNAME/context-hub
+pip install git+https://github.com/heiyan-2020/context_hub
 ```
 
-<sub>(Replace `USERNAME` once the repo is published. Requires Python ≥ 3.10.)</sub>
+<sub>(Requires Python ≥ 3.10.)</sub>
 
 ## Quick start
 
